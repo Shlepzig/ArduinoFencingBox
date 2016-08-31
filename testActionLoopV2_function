@@ -1,0 +1,54 @@
+void testActions () {
+	debounceFail();
+	debounceTest();
+	cleanup();
+
+}
+
+void debounceFail(){
+	for (lines = 0; line<lines; line ++){
+		if(evtTmr[line] == 1){
+			evtTmr[line] = 0;
+			//send event to monitor
+		}
+	}
+}
+
+void debounceTest(){
+	if(evtTmr[6] == 0){ // nothing is happening on the lockout timer
+		for (lines = 0; line<lines; line ++){
+			if(evtTmr[line] > debounce){
+				evtTmr[line] = 2;
+				evtTmr[6] = 11;// something is happening now, start the timer
+				//send event to monitor
+			}
+		}
+	}
+	else if (evtTmr[6] > 11){ // something is happening on the lockout timer
+		// check to see if any lines have debounced
+		for (lines = 0; line<lines; line ++){
+			if(evtTmr[line] > debounce){
+				evtTmr[line] = 2;
+				evtTmr[6] = 7; // stop the lockout timer, tell it the player hit during lockout
+				//send event to monitor
+			}
+			else {
+				evtTmr[6] = evtTmr[6] + incrementUS; // increment the lockout timer
+			}
+		}
+	}
+	else if (evtTmr[6] > lockout){ // lockout time has runout
+			for (lines = 0; line<lines; line ++){
+			if(evtTmr[line] > debounce){
+				evtTmr[line] = 3;
+				evtTmr[6] = 8; // stop the lockout timer, tell it the player hit after lockout
+				//send event to monitor
+			}
+			else {
+				evtTmr[6] = evtTmr[6] + incrementUS; // increment the lockout timer
+			}
+	}
+	else if (evtTmr[6] > runout) { // timer > runout time
+			evtTmr[6} = 9; // stop the lockout timer tell it that the phrase is over
+	}
+}
