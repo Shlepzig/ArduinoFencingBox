@@ -1,0 +1,25 @@
+//---------------------------------------------
+//readingHeader prints a header for the reading data
+void readingHeader() {
+	Serial.println("header\t\t\tC1\t\tB1\tA1\t\A2\tB2\t\tC2\tNotes");
+}
+
+//---------------------------------------------------------------------------------
+//debug output is a generic debugging output utility
+void debugOutput (String debugIntro, unsigned long debugTime, long debugArray[6] , String debugMessage) {
+	Serial.print(debugIntro + " ");
+	Serial.print(microClockReadout(debugTime));
+	Serial.print("\t");
+	
+	for (line = 0; line < lines; line ++) {
+		Serial.print(debugArray[line])
+			if (line == 0 || line == 4) {
+			Serial.print("\t");
+			}
+		Serial.print("\t")
+	}
+	
+	  //Serial.print("\t");
+	  Serial.print(debugMessage);
+	  Serial.println(); // new line
+}
