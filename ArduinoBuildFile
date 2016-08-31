@@ -1,0 +1,491 @@
+ long lineRds[6] = {10, 20, 30, 40, 50, 60}; // readings for each line
+ long lineBse[6] = {70, 80, 90, 100, 110, 120}; // readings for each line
+ long evtTmr[7] = {0, 0, 0, 0, 0, 0, 0}; // timers for Events on each line 0-5 current 6-11 old
+ byte Pins[6] = {A0, A1, A2, A3, A4, A5};    //analog pin array
+ unsigned long timeStampUs;  // time stamp in micro-seconds
+ unsigned long incrementUs;  // micro-second increment
+ unsigned long oldMicros = 0;    // micro-second history
+ unsigned long debounce;
+ unsigned long lockout;
+ unsigned long runout;
+
+int line;                                   // array counter for line 0-5
+int lines = 6;                              // number of lines being read
+int range = 100;
+int PHASE;
+String message = "-";
+//-----------------------------------------------------------------
+//-----------------------------------------------------------------
+
+void setup() {
+  // initialize serial communication at 9600 bits per second:
+  Serial.begin(9600);
+}
+//-----------------------------------------------------------------
+//-----------------------------------------------------------------
+
+void loop() {
+  // put your main code here, to run repeatedly:
+
+  timeStampUs = 0;
+
+PHASE = 1;
+  Serial.println();
+  Serial.println("START"); // print an empty line ---
+  readingHeader();
+  timerUs();  // set timer when it starts
+  debugOutput ("   ", timeStampUs, lineRds ,"timeStampUs");
+  debugOutput ("   ", incrementUs, lineRds ,"incrementUs");
+//  debugOutput ("  ", oldMicros, lineRds ,"oldMicros");
+
+//  setup Phase 1
+  while (PHASE == 1){
+  timerUs();  // set timer when it starts
+  debugOutput ("P:1", timeStampUs, lineRds ,"Phase 1: Setup");
+  
+  // delay(1*1000);// 10 second delay
+  
+  setBaseline(); // set the baseline
+
+  PHASE = 2;
+
+  }
+
+  while (PHASE == 2){  
+  timerUs();  // set timer when it starts
+  debugOutput ("P:2", timeStampUs, lineRds ,"Phase 2: testing");
+  
+  testPhase();  // line 66
+  
+  delay(10*1000);// 10 second delay
+  
+  if(timeStampUs > (45000000)){
+        PHASE = 3;
+    }
+  } // end phase 2
+
+  debugOutput ("P:3", timeStampUs, lineRds ,"Phase 3: finish");
+  timeStampUs = 0;
+ 
+}
+//-----------------------------------------------------------------
+//-----------------------------------------------------------------
+// Phase Functions
+//-----------------------------------------------------------------
+void testPhase(){
+  
+  timerUs();  // set timer when it starts
+  
+  long testStartTime = timeStampUs; // move timestamp into saving place
+  int start = random(200, 500);
+  int duration1 = random(1, 10);
+  int duration2 = random(1, 10);
+  int testDelay = random(1, 30);
+
+  //Serial.println("Start testPhase");
+
+  int testCycles = 1000;
+  for (int tCycles = 0; tCycles < testCycles; tCycles++) {
+
+    timerUs(); // line 360
+    readingCycle(); // line 287
+
+    //---------------------------------------------
+    // - start debugging tests in the cycles section -
+    if (tCycles > start && tCycles < (start + duration1)) { // send out signal on line A2
+      lineRds[3] = 630; // over write data in register during the window
+    }
+    if (tCycles > start + testDelay && tCycles < (start + testDelay + duration2)) { // send out signal on line A1
+      lineRds[2] = 630; // over write data in register during the window
+    }
+    // - end debugging test in the cycles section -
+    //---------------------------------------------
+
+    testEventCycle(); // line 299
+    //testActionCycle(); //line 124
+  }
+  // 
+  // benchmarking timer
+  timerUs();
+  testStartTime = timeStampUs - testStartTime;
+  debugOutput("P:2",timeStampUs, lineRds, ("Actions " + String(testStartTime/1000) + " ms"));
+  resetTmr();
+}
+
+//-----------------------------------------------------------------
+//-----------------------------------------------------------------
+
+//-----------------------------------------------------------------
+//utility functions
+//------------------------------------------------------------------
+/*
+  Actions: (weapon specific definitions) tests the conditions of the event and tests against touch conditions.
+  ·         If the event register is 0 do nothing
+  ·         If the event register is > 11 test for current conditions on other lines (each weapon will have it’s own logic tree
+  Check debounce conditions (for each weapon 2-5 ms epee, 12 ms foil, .1-1 ms saber App B, material rules)
+  If debounce failed send data to monitor (serial PY version only)
+  If line = fencer1 (0-3) and check line for fr (a or b) for touch conditions
+  Check anti-blocking and whipover conditions
+  Record the timestamp of an event in register 6
+  ·         If an event is underway set lockout timer in register 7/8 (?? Should this
+            be positive set the timeStamp to meet and keep checking or negative test to see if the required time has expired)
+  ·         Set the timer to the appropriate timer value for the conditions
+  ·         There are some critical variables defined for each weapon
+   Debounce: the amount of time for an event to be sustained to register a hit
+   Lockout: the amount of time the other fencer has to register a valid hit
+   Runout: (fencer feedback function to indicate that a hit registered just outside of lockout time)
+*/
+// testActionCycle will evaluate the event array and return values to the phrase array
+
+void testActionCycle() {                          // this is a test action that responds to long times
+
+  bool writeTimer = false;
+  debounce = (20 * 1000);   // debounce - 20 ms
+  lockout = (1 * 1000000);  // lockout = 1 second
+  runout = (2 * 1000000);   // runout = 2 second
+  String actionNotes;       // String to hold the debugging string
+
+/*
+    0 = no action or event is happening write the start of events (11) into timer
+    1 = debounce test failed (update the event Cycle to reflect)
+    2 = valid touch passed debounce (start lockout timers)
+    3 = off-target touch passed debounce (start lockout timer)
+    4 = valid touch in runout
+    5 = off-target touch in runout
+    11 or more: an action is underway update the event timer with the clock increment (from the timestamp)
+
+    test Action Cycle Logic
+    PHRASE  A1(2)     A2(3)    Tmr(6)     NOTES
+    actn    1(0)      --       --         fencer 1 debounce failed reset
+            --        1(0)     --         fencer 2 debounce failed reset
+    tuch    >dbnc(2)  0        (11)       fencer 1 has touched start lockout
+            0         >dbnc(2) (11)       fencer 2 has touched start lockout
+    lckt    --        --       >10(inc)   if either is valid increment lockout
+    dubl    >dbnc(2)  2        <lckt      fencer 1 successfully beat lockout
+            2         >dbnc(2) <lckt      fencer 2 successfully beat lockout
+    rnot    >dbnc(4)  --       <rnot      fencer 1 was close but not close enought
+            --        >dbnc(4) <rnot      fencer 2 was close but not close enough
+    Reset   (0)       (0)      >rnot(0)   the phrase is over - reset
+-------------------------------------------------------------------------------------
+start logical test cycle to increment clocks
+Action Phase
+line    A1(2)     A2(3)    Tmr(6)     NOTE
+actn    1(0)      --       --         fencer 1 debounce failed reset
+        --        1(0)     --         fencer 2 debounce failed reset
+*/
+  if (evtTmr[2] == 1 ) {  // event on line 2 has failed
+    evtTmr[2] = 0;                               // reset timer for 2
+    writeTimer = true;                           // write event to register
+    // debugging message
+    actionNotes = "fencer 1 touch has failed";
+  }
+ 
+  if (evtTmr[3] == 1 ) {  // event on line 2 has failed
+    evtTmr[3] = 0;                               // reset timer for 3
+    writeTimer = true;                           // write event to register
+    // debugging message
+    actionNotes = "fencer 2 touch has failed";
+  }
+/*
+Intial Touch Phase: one fencer has successfully triggered a light
+line    A1(2)     A2(3)    Tmr(6)     NOTES
+tuch    >dbnc(2)  0        (11)       fencer 1 has touched start lockout
+        0         >dbnc(2) (11)       fencer 2 has touched start lockout
+*/
+  if (evtTmr[2] > debounce && evtTmr[9] == 0) {
+    evtTmr[2] = 2;                               // show debounce is true for fencer 1
+    evtTmr[6] = 11;                              // start fencer 2 phrase timer at 11
+
+    writeTimer = true;
+    // debugging message
+    actionNotes = "fencer 1 TOUCH first";
+  }
+  if (evtTmr[3] > debounce && evtTmr[8] == 0) {
+    evtTmr[3] = 2;                               // show debounce is true for fencer 1
+    evtTmr[6] = 11;                              // start fencer 2 phrase timer at 11
+
+    writeTimer = true;
+    // debugging message
+    actionNotes = "fencer 2 TOUCH first";
+  }
+/*  
+lockout phase: one fencer has triggered an action increment lockout timers
+line    A1(2)     A2(3)    Tmr(6)     NOTES
+lckt    --        --       >10(inc)   if either is valid increment lockout
+*/
+  if (evtTmr[6] > 10) {
+      evtTmr[6] = evtTmr[6] + incrementUs;          // increment lockout timer in all cases
+  
+      // debugging section
+  }
+/*
+Double touch is true
+line    A1(2)     A2(3)    Tmr(6)     NOTES
+dubl    >dbnc(2)  2        <lckt     fencer 1 successfully beat lockout
+         2         >dbnc(2) <lckt     fencer 2 successfully beat lockout
+*/
+  if (evtTmr[2] > debounce && evtTmr[3] == 2 && evtTmr[6] < lockout) {
+    evtTmr[2] = 2;                               // Show Fencer 1 has also hit
+    writeTimer = true;
+    // debugging message
+    actionNotes = "fencer 1 has beaten the lockout";
+  }
+  if (evtTmr[3] > debounce && evtTmr[2] == 2 && evtTmr[6] < lockout) {
+    evtTmr[3] = 2;                               // Show Fencer 2 has also hit
+    writeTimer = true;
+    // debugging message
+    actionNotes = "fencer 2 has beaten the lockout";
+  }
+/*
+RUNOUT
+Test for touches in the runout period for fencer feedback
+This is only used in the practice version for Python
+line    A1(2)     A2(3)    Tmr(6)     NOTES
+rnot    >dbnc(4)  --       <rnot      fencer 1 was close but not close enough
+        --        >dbnc(4) <rnot      fencer 2 was close but not close enough
+*/
+  if (evtTmr[2] > debounce && evtTmr[3] == 2 && evtTmr[6] < runout) {
+    evtTmr[2] = 4;                               // Show Fencer 1 has also hit
+    evtTmr[6] = 0;                               // Reset the timer: everything is done
+
+    writeTimer = true;
+    // debugging message
+    actionNotes = "fencer 1 didn’t quite beat it";
+  }
+  if (evtTmr[3] > debounce && evtTmr[2] == 2 && evtTmr[6] < runout) {
+    evtTmr[3] = 4;                               // Show Fencer 2 has also hit
+    evtTmr[6] = 0;                               // Reset the timer: everything is done
+    writeTimer = true;
+
+    // debugging message
+    actionNotes = "fencer 2 didn’t quite beat it";
+  }
+/*
+RESET phase: runout has expired and the time
+line    A1(2)     A2(3)    Tmr(6)     NOTES
+lckt    --        --       >rnot      The runout timer has expired: Phrase is over
+*/
+  if (evtTmr[6] > runout) {
+    resetTmr();
+    writeTimer = true;
+    // debugging section
+    actionNotes = "runout expired phrase is over";
+  }
+
+// check to write event to register
+  if (writeTimer) { // write the time stamp to the event
+     debugOutput("act",timeStampUs, lineRds, actionNotes);
+
+  }
+}
+
+//---------------------------------------------
+/*
+  Cycle: is a read cycle (reads the analog inputs)
+  ·         It takes about 100 microseconds (0.0001 s) to read an analog input, so the maximum reading rate is about 10,000 times/sec
+  ·         It reads all lines defined by the lines variable and writes them to the linRds array ( unsigned int Array [12])
+  ·         Current readings are in the array values 0-5
+  ·         Baseline readings are in the array values 6-11
+  ·         Readings will be between 0 and 1024 (0-5 V
+*/
+// reading Cycle funtion that checks all lines and events
+void readingCycle() {                 // set global variables for cycle
+  for (line = 0; line < lines; line ++) {
+    lineRds[line] = analogRead(Pins[line]);
+  }
+}
+//---------------------------------------------
+/*
+  Event: compare the readings from the cycle
+  ·         Creates a time stamp (microseconds) and increment (microseconds since the last timestamp)
+  ·         If the readings deviate from the baseline record then it records an event to the evtTmr array (unsigned long array [9])
+  ·         The RANGE global variable is used to describe the minimum deviation (sensitivity) from the baseline to trigger an event this can be set for each weapon
+  ·         Line event timers are 0-5 (length of event in microseconds)
+  ·         Register 6 = ACTION timestamp goes into 6 (see the next phase)
+  ·         Register 7 = Fencer 1 (left) lockout timer
+  ·         Register 8 – Fencer 2 (right) lockout timer
+  ·         Timer readings start at 11 – Timer readings 0-10 are reserved for conditions and affect if the timer should be written:
+  0 = no action or event is happening write the start of events (11) into timer
+  1 = debounce test passed (do not write to timer until lockout is cleared)
+  2 = debounce test failed (reset timer – used for fencer feedback functions)
+  3 = lockout testing (debounce returned true – start the lockout timer for the other fencer)
+  4 = lockout failed (reset lockout timers)
+  11 or more: an action is underway update the event timer with the clock increment (from the timestamp)
+*/
+// event Cyle checks for events and writes them to the evtArray
+
+void testEventCycle() {                 // set global variables for cycle
+
+  for (line = 0; line < lines; line ++) {
+    if (abs(lineRds[line] - lineBse[line]) > range) { // the line has deviated from the baseline
+      //eventTrue(line); //line 322
+//----testing script shorter
+        if (evtTmr[line] == 0) {
+          evtTmr[line] = 11;           // start timer at 11 0-10 are saved
+          // debugging
+          debugOutput("bgn",timeStampUs, evtTmr, "event STARTED");
+        }
+        else if (evtTmr[line] > 10) {  // an event is still happening increment the timer
+          evtTmr[line] = evtTmr[line] + incrementUs;
+          // debugging
+          debugOutput("inc",timeStampUs, evtTmr, "event TRUE");
+        } // otherwise nothing has changed and the
+//----testing script shorter
+    }
+    else {                            // the line has returned to base
+      //eventFalse(line);// run the event false line
+//----testing script shorter
+        if (evtTmr[line] > 10) {      // an event was underway  now it is over
+          evtTmr[line] = 1;           // return to 1 showing the event ended
+          // debugging
+          //Serial.println("EVENT TRUE");
+          debugOutput("end",timeStampUs, lineRds, "event ENDED");
+          debugOutput("---",timeStampUs, evtTmr, "timers");
+        }
+//----testing script shorter   
+    }
+  }
+}
+
+//--------------------------------------------------------------------------
+// TIMER 
+//--------------------------------------------------------------------------
+// timerUs will will post the current time stamp to the global
+// variable and what the increment is from the last time stamp
+void timerUs(){
+  incrementUs = micros() - oldMicros;
+  timeStampUs = timeStampUs + incrementUs;          // set new timeStamp
+  oldMicros = oldMicros + incrementUs;
+}
+//--------------------------------------------------------------------------
+// set Baseline will set the baseline readings for the lines
+void setBaseline () {
+  timerUs();
+  unsigned long baselineTimer = timeStampUs;
+  
+  int LIMIT = 100;
+  long baselineRds[6] = {0, 0, 0, 0, 0, 0};
+  // unsigned int can hold 65,535
+  // each reading is a value from 0 to 1023
+  // read the lines a bunch of times
+  for (int cycles = 0; cycles < LIMIT; cycles++) {
+    readingCycle();                   // read Pins and put values in lineRds
+    for (line = 0; line < lines; line ++) { // add the values to outside registers
+      baselineRds[line] = baselineRds[line] + lineRds[line];
+    }
+  }
+  for (line = 0; line < lines; line ++) { // set the registers based on the average
+    lineBse[line] = baselineRds[line] / LIMIT;
+  }
+
+  // benchmarking timer
+  timerUs();
+  baselineTimer = timeStampUs - baselineTimer;
+  debugOutput("P:1",timeStampUs, lineRds, ("bsLine " + String(baselineTimer/1000) + " ms"));
+
+}
+
+
+//---------------------------------------------
+// debugging functions
+//---------------------------------------------
+// testEventCycle will put fake data into the event cycle array for testing
+//void eventCycle(){
+// for (line = 0; line < lines; line ++){
+//   evtTmr[line] = millis();
+//  }
+//
+//// debugging output
+//  microClockReadout(micros());
+//  Serial.print("\t");
+//  timerOutput();
+//  Serial.print("eventCycle");
+//}
+//---------------------------------------------
+// reset timer will reset the evtTmr to 0
+
+void resetTmr() {
+  for (line = 0; line < 6; line ++) {
+    evtTmr[line] = 0;    
+  }
+  // debugging message
+  debugOutput ("rst", timeStampUs, evtTmr ,"Event Timer Reset");
+}
+
+//---------------------------------------------
+// debugging outputs
+//---------------------------------------------
+//readingHeader prints a header for the reading data
+void readingHeader() {
+  Serial.println("header\t\t\tC1\t\tB1\tA1\t\A2\tB2\t\tC2\tNotes");
+}
+
+//---------------------------------------------------------------------------------
+//debug output is a generic debugging output utility
+void debugOutput (String debugIntro, unsigned long debugTime, long debugArray[6] , String debugMessage) {
+  Serial.print(debugIntro + " ");
+  Serial.print(microClockReadout(debugTime));
+  Serial.print("\t");
+
+  for (line = 0; line < lines; line ++) {
+    Serial.print(debugArray[line]);
+    if (line == 0 || line == 4) {
+      Serial.print("\t");
+    }
+    Serial.print("\t");
+  }
+
+  //Serial.print("\t");
+  Serial.print(debugMessage);
+  Serial.println(); // new line
+}
+//---------------------------------------------
+// Micro Clock Readout parses the microsecond timer into text
+String microClockReadout (long clockReading) {
+    message = ""; // clear message before assembly
+//
+//  message = (String(clockReading) + " us ");
+//
+//  Serial.println("microClockReadout " + String(clockReading));
+//  
+//  // need to shorten the value because hundth is falling victim to overun
+long shaver = (clockReading / 1000000);  // shaver grabs seconds
+long clockRdng = (clockReading - (shaver * 1000000));
+long hundths = clockRdng / 1;            // converts reamainder of clock to hundredths
+long seconds = shaver;                   //
+long minutes = seconds / 60;             //
+// shorten the seconds from mintues
+ seconds = seconds - (60 * minutes);               // trim off minutes
+
+  if (minutes < 10) {                               // pad minutes
+    message = (message + "0");
+  }
+  message = (message + String(minutes) + ":");      // add minutes
+  if (seconds < 10) {                               // pad second
+    message = (message + "0");                      //
+  }                                                 //
+  message = (message + String(seconds) + ".");      // add seconds
+  if (hundths < 100000) {                           // pad millionths
+    message = (message + "0");                      //
+  }                                                 //
+  if (hundths < 10000) {                            // pad hundred thousandths
+    message = (message + "0");                      //
+  }
+  if (hundths < 1000) {
+    message = (message + "0");
+  }
+  if (hundths < 100) {
+    message = (message + "0");
+  }
+  if (hundths < 10) {
+    message = (message + "0");
+  }
+  message = (message + String(hundths));
+  // debugging messages
+//  Serial.println();
+//  Serial.println("CLOCK READING " + String(clockReading) + " ");
+//  Serial.println("MICRO CLOCK READOUT");
+//  Serial.println(message);
+
+  return message;
+}
