@@ -1,0 +1,46 @@
+//---------------------------------------------
+// Micro Clock Readout parses the microsecond timer into text
+String microClockReadout (long clockReading) {
+// need to shorten the value because hundth is falling victim to overun
+long shaver = (clockReading / 1000000);  // shaver grabs seconds
+long clockRdng = (clockReading - (shaver * 1000000));
+long hundths = clockRdng / 1;            // converts reamainder of clock to hundredths
+long seconds = shaver;                   //
+long minutes = seconds / 60;             //
+// shorten the seconds from mintues
+	seconds = seconds - (60 * minutes);               // trim off minutes
+	if (minutes < 10) {                               // pad minutes
+		message = (message + "0");
+	}
+  	message = (message + String(minutes) + ":");      // add minutes
+  	if (seconds < 10) {                               // pad second
+    	message = (message + "0");                      //
+  	}                                                 //
+  	message = (message + String(seconds) + ".");      // add seconds
+  	if (hundths < 100000) {                           // pad millionths
+    	message = (message + "0");                      //
+  	}                                                 //
+  	if (hundths < 10000) {                            // pad hundred thousandths
+    	message = (message + "0");                      //
+  	}
+  	if (hundths < 1000) {
+    	message = (message + "0");
+  	}
+  	if (hundths < 100) {
+    	message = (message + "0");
+  	}
+  	if (hundths < 10) {
+    	message = (message + "0");
+  	}
+  	message = (message + String(hundths));
+  	
+  	/*
+ 		debugging messages
+ 		Serial.println();
+ 		Serial.println("CLOCK READING " + String(clockReading) + " ");
+		Serial.println("MICRO CLOCK READOUT");
+		Serial.println(message);
+	*/
+
+	return message;
+}
