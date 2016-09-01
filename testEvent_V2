@@ -1,0 +1,53 @@
+//-------------------------------------------------------------------------------------------------------------------
+/*
+Event: compare the readings from the cycle, 
+	determines valid and invalid actions
+	lights blocking lights
+	increments the line timers
+	
+increment (microseconds since the last timestamp)
+
+The comparison
+If the readings deviate from the baseline record then it records an event to the evtTmr array (unsigned long array [9])
+
+The RANGE global variable is used to describe the minimum deviation (sensitivity)
+	from the baseline to trigger an event this can be set for each weapon
+
+Line event timers are 0-5 (length of event in microseconds)
+Register 6 = ACTION timestamp goes into 6 (see the next phase)
+  
+Timer readings start at 11 – Timer readings 0-10 are reserved for conditions and affect if the timer should be written:
+	0 = no action or event is happening write the start of events (11) into timer
+  	1 = debounce test failed (do not write to timer until lockout is cleared)
+  	2 = debounce test passed VALID TOUCH 
+		(reset timer – used for fencer feedback functions)
+  	3 = debounce test passed INVALID TOUCH (OFF-TARGET) 
+  		(debounce returned true – start the lockout timer)
+  	11 or more: an action is underway update the event timer with the clock increment (from the timestamp)
+*/
+void testEventCycle() {                 				// set global variables for cycle
+
+  for (line = 0; line < lines; line ++) {				// scan all lines and look for differences
+    if (abs(lineRds[line] - lineBse[line]) > range) { 	// the line has deviated from the baseline
+        if (evtTmr[line] == 0) {						// if nothing is happening yet
+          	evtTmr[line] = 11;           					// start timer at 11 || 0-10 are saved
+// debugging - post messages mid phrase to update serial viewer
+          	debugOutput("bgn",timeStampUs, evtTmr, "event STARTED");
+        }
+        else if (evtTmr[line] > 10) {  					// an event is still happening increment the timer
+          	evtTmr[line] = evtTmr[line] + incrementUs;
+// debugging
+          	debugOutput("inc",timeStampUs, evtTmr, "event TRUE");
+        }												// otherwise nothing has changed and the
+    }
+    else {                            					// the line has returned to base
+        if (evtTmr[line] > 10) {      					// an event was underway  now it is over
+          	evtTmr[line] = 1;           					// return to 1 showing the event ended
+// debugging
+          	//Serial.println("EVENT TRUE");
+        	debugOutput("end",timeStampUs, lineRds, "event ENDED");
+        	debugOutput("---",timeStampUs, evtTmr, "timers");
+        }
+    }
+  }
+}
