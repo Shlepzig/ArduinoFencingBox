@@ -1,0 +1,32 @@
+//------------------------------------------------------------------------------------------------------------
+/*
+set Baseline will set the baseline readings for the lines
+*/
+void setBaseline () {
+	timerUs();
+  	unsigned long baselineTimer = timeStampUs;
+	int LIMIT = 100;
+  	long baselineRds[6] = {0, 0, 0, 0, 0, 0};
+  	
+/*
+unsigned int can hold 65,535
+each reading is a value from 0 to 1023
+read the lines a bunch of times
+*/
+
+	for (int cycles = 0; cycles < LIMIT; cycles++) {
+    	readingCycle();                   								// read Pins and put values in lineRds
+		for (line = 0; line < lines; line ++) { 						// add the values to outside registers
+  			baselineRds[line] = baselineRds[line] + lineRds[line];
+		}
+  	}
+  	for (line = 0; line < lines; line ++) { // set the registers based on the average
+    	lineBse[line] = baselineRds[line] / LIMIT;
+  	}
+
+// benchmarking the timer to test the read performance
+  	timerUs();
+  	baselineTimer = timeStampUs - baselineTimer;
+  	debugOutput("P:1",timeStampUs, lineRds, ("bsLine " + String(baselineTimer/1000) + " ms"));
+
+}
